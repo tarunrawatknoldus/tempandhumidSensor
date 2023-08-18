@@ -13,9 +13,10 @@ fn main() {
     let mut pin = gpio
         .get(17)
         .expect("Failed to get GPIO pin")
-        .into_output(); // Initialize as OutputPin
+        .into_output(); // Use GPIO pin 17 for DHT11
 
     loop {
+        // Send start signal to the DHT11 sensor
         send_start_signal(&mut pin);
         let data = read_data(&gpio, 17);
 
