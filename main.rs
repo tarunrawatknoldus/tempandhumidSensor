@@ -1,66 +1,56 @@
 extern crate rppal;
-
 use rppal::gpio::{Gpio, Level};
 use rppal::system::DeviceInfo;
-use std::thread::sleep;
-use std::time::Duration;
+use async_std::task;
 
 fn main() {
-    println!("Running on: {:?}", DeviceInfo::new().unwrap());
+    task::block_on(async {
+        println!("Running on: {:?}", DeviceInfo::new().unwrap());
 
-    let gpio = Gpio::new().expect("Failed to initialize GPIO");
+        let gpio = Gpio::new().unwrap();
+        let mut pin = gpio.get(17).unwrap().into_output(); // Initialize as OutputPin
 
-    let mut pin = gpio
-        .get(17)
-        .expect("Failed to get GPIO pin")
-        .into_output(); // Use GPIO pin 17 for DHT11
+        loop {
+            // Send start signal to the DHT11 sensor
+            pin.set_low(); // Pull the pin low
+            async_std::task::sleep(Duration::from_millis(18)).await; // Hold low for at least 18ms
+            pin.set_high(); // Pull the pin high
+            async_std::task::sleep(Duration::from_micros(40)).await; // Hold high for 20-40us
 
-    loop {
-        // Send start signal to the DHT11 sensor
-        send_start_signal(&mut pin);
-        let data = read_data(&gpio, 17);
+            // Switch to input mode for reading
+            let pin = gpio.get(17).unwrap().into_input(); // Reinitialize as InputPin
 
-        let humidity = data[0] as f32;
-        let temperature = data[2] as f32;
+            // Wait for the DHT11 sensor to respond
+            while pin.read() == Level::High {}
+            while pin.read() == Level::Low {}
 
-        println!("Temperature: {:.1}°C, Humidity: {:.1}%", temperature, humidity);
+            // Read data from the DHT11 sensor
+            let mut data = [0u8; 5];
+            for i in 0..5 {
+                data[i] = read_byte(&pin).await; // Pass the InputPin reference
+            }
 
-        sleep(Duration::from_secs(2)); // Delay between readings
-    }
+            // Interpret the data
+            let humidity = data[0] as f32;
+            let temperature = data[2] as f32;
+
+            println!("Temperature: {:.1}°C, Humidity: {:.1}%", temperature, humidity);
+
+            async_std::task::sleep(Duration::from_secs(2)).await; // Delay between readings
+        }
+    });
 }
 
-fn send_start_signal(pin: &mut rppal::gpio::OutputPin) {
-    pin.set_low();
-    sleep(Duration::from_millis(18));
-    pin.set_high();
-    sleep(Duration::from_micros(40));
-}
-
-fn read_data(gpio: &Gpio, pin_num: u8) -> [u8; 5] {
-    let mut data = [0u8; 5];
-    let mut pin = gpio.get(pin_num).unwrap().into_input();
-
-    for i in 0..5 {
-        data[i] = read_byte(&pin);
-    }
-
-    data
-}
-
-fn read_byte(pin: &rppal::gpio::InputPin) -> u8 {
+async fn read_byte(pin: &rppal::gpio::InputPin) -> u8 {
     let mut byte = 0;
-
     for _ in 0..8 {
         while pin.read() == Level::Low {}
-        sleep(Duration::from_micros(50));
-
+        async_std::task::sleep(Duration::from_micros(50)).await; // Bit start time for DHT11
         if pin.read() == Level::High {
             byte |= 1;
         }
         byte <<= 1;
-
         while pin.read() == Level::High {}
     }
-
     byte
 }
