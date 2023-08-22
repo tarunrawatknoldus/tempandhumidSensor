@@ -1,66 +1,69 @@
-use async_std::task;
-use sysfs_gpio::{Direction, Pin};
+extern crate rppal;
+
+use std::thread::sleep;
 use std::time::Duration;
+use rppal::gpio::{Gpio, InputPin};
+use rppal::system::DeviceInfo;
+
+const DHT_PIN: u8 = 4; // GPIO Pin number connected to DHT11 data pin
 
 fn main() {
-    task::block_on(async {
-        let pin_num = 17; // GPIO pin 17
+    println!("Raspberry Pi Temperature and Humidity Monitoring");
 
-        let mut pin = Pin::new(pin_num);
-        pin.export().expect("Failed to export GPIO pin");
-        pin.set_direction(Direction::Out)
-            .expect("Failed to set GPIO direction");
+    let gpio = Gpio::new().expect("Failed to initialize GPIO.");
+    let pin = gpio.get(DHT_PIN).expect("Failed to get GPIO pin.").into_input();
 
-        println!("Running on: Raspberry Pi (or similar)");
-
-        loop {
-            // Send start signal to the DHT11 sensor
-            pin.set_value(0).expect("Failed to set GPIO value");
-            task::sleep(Duration::from_millis(18)).await;
-            pin.set_value(1).expect("Failed to set GPIO value");
-            task::sleep(Duration::from_micros(40)).await;
-
-            // Switch to input mode for reading
-            pin.set_direction(Direction::In)
-                .expect("Failed to set GPIO direction");
-
-            // Wait for the DHT11 sensor to respond
-            while pin.get_value().expect("Failed to read GPIO value") == 1 {}
-            while pin.get_value().expect("Failed to read GPIO value") == 0 {}
-
-            // Read data from the DHT11 sensor
-            let mut data = [0u8; 5];
-            for i in 0..5 {
-                data[i] = read_byte(&pin).await.expect("Error reading byte");
-            }
-
-            // Interpret the data
-            let humidity = data[0] as f32;
-            let temperature = data[2] as f32;
-
+    loop {
+        // Read data from DHT11
+        if let Ok(data) = read_dht_data(&pin) {
+            let (temperature, humidity) = parse_dht_data(data);
             println!("Temperature: {:.1}°C, Humidity: {:.1}%", temperature, humidity);
-
-            task::sleep(Duration::from_secs(2)).await; // Delay between readings
+        } else {
+            println!("Failed to read data from DHT11.");
         }
-    });
+
+        sleep(Duration::from_secs(2));
+    }
 }
 
-async fn read_byte(pin: &Pin) -> Result<u8, Box<dyn std::error::Error>> {
-    let mut byte = 0;
-    for _ in 0..8 {
-        while pin.get_value()? == 0 {
-            task::sleep(Duration::from_micros(50)).await;
-        }
-        task::sleep(Duration::from_micros(50)).await;
+fn read_dht_data(pin: &InputPin) -> Result<[u8; 5], rppal::gpio::Error> {
+    // Initialize variables to collect data bits
+    let mut data = [0u8; 5];
+    let mut bit_index = 0;
+    let mut current_byte = 0u8;
 
-        if pin.get_value()? == 1 {
-            byte |= 1;
+    // Generate start signal
+    let mut last_state = rppal::gpio::Level::High;
+    for _ in 0..85 {
+        let level = pin.read();
+        if level == rppal::gpio::Level::Low && last_state == rppal::gpio::Level::High {
+            // Detect falling edge as a start signal
+            break;
         }
-        byte <<= 1;
-
-        while pin.get_value()? == 1 {
-            task::sleep(Duration::from_micros(50)).await;
-        }
+        last_state = level;
+        std::thread::sleep(Duration::from_micros(2));
     }
-    Ok(byte)
+
+    // Read data bits
+    for _ in 0..40 {
+        let level = pin.read();
+        if level == rppal::gpio::Level::High {
+            current_byte |= 1 << (7 - bit_index);
+        }
+        bit_index += 1;
+        if bit_index == 8 {
+            data[bit_index / 8 - 1] = current_byte;
+            current_byte = 0;
+            bit_index = 0;
+        }
+        std::thread::sleep(Duration::from_micros(1));
+    }
+
+    Ok(data)
+}
+
+fn parse_dht_data(data: [u8; 5]) -> (f32, f32) {
+    let humidity = data[0] as f32;
+    let temperature = data[2] as f32 + (data[3] as f32 / 10.0);
+    (temperature, humidity)
 }
