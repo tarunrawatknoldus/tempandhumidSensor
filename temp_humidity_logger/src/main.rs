@@ -1,94 +1,70 @@
 extern crate rppal;
-extern crate csv;
+extern crate rppal_sys;
 
+use rppal::gpio::{Gpio, InputPin};
 use std::thread::sleep;
 use std::time::Duration;
-use std::fs::File;
-use std::error::Error;
-use csv::WriterBuilder;
-use rppal::gpio::{Gpio, InputPin};
-
-const DHT_PIN: u8 = 4; // GPIO Pin number connected to DHT11 data pin
-
-struct SensorData {
-    temperature: f32,
-    humidity: f32,
-}
 
 fn main() {
-    println!("Raspberry Pi Temperature and Humidity Monitoring");
-
-    let gpio = Gpio::new().expect("Failed to initialize GPIO.");
-    let pin = gpio.get(DHT_PIN).expect("Failed to get GPIO pin.").into_input();
-
-    let mut csv_writer = initialize_csv_file("sensor_data.csv").expect("Failed to initialize CSV file.");
-
+    let gpio = Gpio::new().expect("Failed to initialize GPIO");
+    let pin = gpio.get(4).expect("Failed to get GPIO pin 4").into_input();
+    
     loop {
-        // Read data from DHT11
-        if let Ok(data) = read_dht_data(&pin) {
-            let (temperature, humidity) = parse_dht_data(data);
-            println!("Temperature: {:.1}°C, Humidity: {:.1}%", temperature, humidity);
-
-            // Store data in CSV file
-            let sensor_data = SensorData { temperature, humidity };
-            write_data_to_csv(&mut csv_writer, sensor_data).expect("Failed to write data to CSV file.");
-        } else {
-            println!("Failed to read data from DHT11.");
+        match read_dht11(&pin) {
+            Ok((humidity, temperature)) => {
+                println!("Humidity: {}%, Temperature: {}°C", humidity, temperature);
+            }
+            Err(e) => {
+                eprintln!("Error: {:?}", e);
+            }
         }
 
+        // Delay for a while before reading again
         sleep(Duration::from_secs(2));
     }
 }
 
-fn read_dht_data(pin: &InputPin) -> Result<[u8; 5], rppal::gpio::Error> {
-    // Initialize variables to collect data bits
-    let mut data = [0u8; 5];
-    let mut bit_index = 0;
-    let mut current_byte = 0u8;
+fn read_dht11(pin: &InputPin) -> Result<(f32, f32), &'static str> {
+    // Send start signal
+    pin.set_mode(rppal::gpio::Mode::Output);
+    pin.write(rppal::gpio::Level::Low);
+    sleep(Duration::from_millis(18));
+    pin.set_mode(rppal::gpio::Mode::Input);
 
-    // Generate start signal
+    // Read response
+    let (mut data, mut i) = ([0u8; 5], 0);
     let mut last_state = rppal::gpio::Level::High;
-    for _ in 0..85 {
-        let level = pin.read();
-        if level == rppal::gpio::Level::Low && last_state == rppal::gpio::Level::High {
-            // Detect falling edge as a start signal
-            break;
+
+    for _ in 0..80 {
+        let mut count = 0;
+        while pin.read() == last_state {
+            count += 1;
+            if count >= 255 {
+                return Err("Sensor response timeout");
+            }
+            sleep(Duration::from_micros(1));
         }
-        last_state = level;
-        std::thread::sleep(Duration::from_micros(2));
+
+        last_state = pin.read();
+
+        if (i % 8) != 0 {
+            data[i / 8] <<= 1;
+        }
+
+        if count > 16 {
+            data[i / 8] |= 1;
+        }
+
+        i += 1;
     }
 
-    // Read data bits
-    for _ in 0..40 {
-        let level = pin.read();
-        if level == rppal::gpio::Level::High {
-            current_byte |= 1 << (7 - bit_index);
-        }
-        bit_index += 1;
-        if bit_index == 8 {
-            data[bit_index / 8 - 1] = current_byte;
-            current_byte = 0;
-            bit_index = 0;
-        }
-        std::thread::sleep(Duration::from_micros(1));
+    // Verify checksum
+    if (data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16) & 0xFF != data[4] as u16 {
+        return Err("Checksum verification failed");
     }
 
-    Ok(data)
-}
+    let humidity = data[0] as f32 + (data[1] as f32 * 0.1);
+    let temperature = (data[2] & 0x7F) as f32 + ((data[3] as f32 & 0x7F) * 0.1);
 
-fn parse_dht_data(data: [u8; 5]) -> (f32, f32) {
-    let humidity = data[0] as f32;
-    let temperature = data[2] as f32 + (data[3] as f32 / 10.0);
-    (temperature, humidity)
-}
-
-fn initialize_csv_file(filename: &str) -> Result<csv::Writer<File>, Box<dyn Error>> {
-    let file = File::create(filename)?;
-    let csv_writer = WriterBuilder::new().has_headers(true).from_writer(file);
-    Ok(csv_writer)
-}
-
-fn write_data_to_csv(csv_writer: &mut csv::Writer<File>, data: SensorData) -> Result<(), Box<dyn Error>> {
-    csv_writer.serialize((data.temperature, data.humidity))?;
-    Ok(())
+    Ok((humidity, temperature))
 }
