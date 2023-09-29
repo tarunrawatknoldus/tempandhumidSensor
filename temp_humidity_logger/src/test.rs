@@ -1,48 +1,30 @@
 use simple_dht11::dht11::Dht11;
-use reqwest::Client;
+use std::fs::File;
 use std::error::Error;
-use std::fs::OpenOptions;
 use csv::Writer;
-use serde::Serialize; // Add this for serialization
-
-// Create a struct for the sensor data
-#[derive(Serialize)]
-struct SensorData {
-    temperature: f32,
-    humidity: f32,
-}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut dht11 = Dht11::new(27)?; // Note this is BCM pin 27
+    let mut writer = Writer::from_path("sensor_data.csv")?; // Create a CSV file
 
-    let response = dht11.get_reading()?;
-    
-    let sensor_data = SensorData {
-        temperature: response.temperature,
-        humidity: response.humidity,
-    };
+    writer.write_record(&["Temperature (°C)", "Humidity (%)"])?;
 
-    // Define the API endpoint URL
-    let api_url = "https://example.com/api/data"; // Replace with your API URL
+    loop {
+        match dht11.get_reading() {
+            Ok(response) => {
+                println!("Temperature: {}°C", response.temperature);
+                println!("Humidity: {}%", response.humidity);
 
-    // Save data to a local CSV file
-    let mut csv_writer = Writer::from_path("sensor_data.csv")?;
-    csv_writer.serialize(sensor_data)?;
+                // Write data to CSV file
+                writer.write_record(&[response.temperature.to_string(), response.humidity.to_string()])?;
+                writer.flush()?;
+            }
+            Err(e) => {
+                eprintln!("Error reading DHT11: {:?}", e);
+            }
+        }
 
-    // Create a reqwest client
-    let client = Client::new();
-
-    // Send a POST request with the JSON data
-    let response = client
-        .post(api_url)
-        .json(&sensor_data)
-        .send()?;
-
-    if response.status().is_success() {
-        println!("Data sent successfully to the API");
-    } else {
-        eprintln!("Failed to send data to the API: {:?}", response);
+        // Delay for 1 second
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
-
-    Ok(())
 }
