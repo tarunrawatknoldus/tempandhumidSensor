@@ -12,12 +12,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         match dht11.get_reading() {
             Ok(response) => {
-                println!("Temperature: {}°C", response.temperature);
-                println!("Humidity: {}%", response.humidity);
+                match response {
+                    Ok(data) => {
+                        println!("Temperature: {}°C", data.temperature);
+                        println!("Humidity: {}%", data.humidity);
 
-                // Write data to CSV file
-                writer.write_record(&[response.temperature.to_string(), response.humidity.to_string()])?;
-                writer.flush()?;
+                        // Write data to CSV file
+                        writer.write_record(&[data.temperature.to_string(), data.humidity.to_string()])?;
+                        writer.flush()?;
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading DHT11: {:?}", e);
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("Error reading DHT11: {:?}", e);
