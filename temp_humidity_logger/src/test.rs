@@ -2,38 +2,47 @@ use simple_dht11::dht11::Dht11;
 use std::thread::sleep;
 use std::time::Duration;
 use std::error::Error;
-use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::Write;
+use serde::{Serialize, Deserialize};
+use serde_json;
+
+#[derive(Serialize, Deserialize)]
+struct SensorData {
+    temperature: f32,
+    humidity: f32,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut dht11 = Dht11::new(27); // Note this is BCM
 
-    // Open or create the CSV file for appending data
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("sensor_data.csv")?;
-
     loop {
         let response = dht11.get_reading();
 
-        println!("Temperature: {}°C, Humidity: {}%", response. temperature, response.humidity);
+        println!("Temperature: {}°C", response.temperature);
+        println!("Humidity: {}%", response.humidity);
 
-        // Format the data as a CSV line
-        let csv_line = format!("Temperature: {}°C, Humidity: {}%\n", response.temperature, response.humidity);
+        // Create a SensorData struct
+        let sensor_data = SensorData {
+            temperature: response.temperature,
+            humidity: response.humidity,
+        };
 
-        // Write data to the CSV file
-        if let Err(err) = file.write_all(csv_line.as_bytes()) {
-            eprintln!("Error writing data to CSV: {}", err);
-        }
+        // Serialize the data to JSON
+        let json_data = serde_json::to_string(&sensor_data)?;
 
-        // Flush the file to ensure data is written immediately
-        if let Err(err) = file.flush() {
-            eprintln!("Error flushing data to CSV: {}", err);
+        // Write JSON data to a file
+        if let Err(err) = save_to_json_file(&json_data) {
+            eprintln!("Error writing data to JSON file: {}", err);
         }
 
         // Sleep for 1 second before the next reading
         sleep(Duration::from_secs(1));
     }
+}
+
+fn save_to_json_file(data: &str) -> Result<(), std::io::Error> {
+    let mut file = File::create("sensor_data.json")?;
+    file.write_all(data.as_bytes())?;
+    Ok(())
 }
