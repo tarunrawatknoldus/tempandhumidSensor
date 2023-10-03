@@ -18,11 +18,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         let response = dht11.get_reading();
 
-        println!("Temperature: {}°C", response.temperature);
-        println!("Humidity: {}%", response.humidity);
+        println!("Temperature: {}°C, Humidity: {}%", response. temperature, response.humidity);
 
         // Format the data as a CSV line
-        let csv_line = format!("{}, {}\n", response.temperature, response.humidity);
+        let csv_line = format!("Temperature: {}°C, Humidity: {}%\n", response.temperature, response.humidity);
 
         // Write data to the CSV file
         if let Err(err) = file.write_all(csv_line.as_bytes()) {
