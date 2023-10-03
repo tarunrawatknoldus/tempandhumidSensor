@@ -1,37 +1,35 @@
 use simple_dht11::dht11::Dht11;
-use std::fs::File;
-use std::error::Error;
-use csv::Writer;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut dht11 = Dht11::new(27)?; // Note this is BCM pin 27
-    let mut writer = Writer::from_path("sensor_data.csv")?; // Create a CSV file
+fn main() {
+    // Create a new Dht11 instance, specifying the GPIO pin where the sensor is connected (BCM numbering).
+    let mut dht11 = Dht11::new(27); // Note this is BCM
 
-    writer.write_record(&["Temperature (°C)", "Humidity (%)"])?;
+    // Use the Dht11 instance to get sensor reading data.
+    let response = dht11.get_reading();
 
-    loop {
-        match dht11.get_reading() {
-            Ok(response) => {
-                match response {
-                    Ok(data) => {
-                        println!("Temperature: {}°C", data.temperature);
-                        println!("Humidity: {}%", data.humidity);
+    // Print the temperature and humidity readings to the console.
+    println!("Temperature: {}°C", response.temperature);
+    println!("Humidity: {}%", response.humidity);
 
-                        // Write data to CSV file
-                        writer.write_record(&[data.temperature.to_string(), data.humidity.to_string()])?;
-                        writer.flush()?;
-                    }
-                    Err(e) => {
-                        eprintln!("Error reading DHT11: {:?}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error reading DHT11: {:?}", e);
-            }
-        }
-
-        // Delay for 1 second
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    // Store the data in a local file.
+    if let Err(err) = save_to_file(response) {
+        eprintln!("Error: {}", err);
     }
+}
+
+fn save_to_file(response: simple_dht11::dht11::Reading) -> io::Result<()> {
+    // Open or create a file named "sensor_data.txt" for appending.
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("sensor_data.txt")?;
+
+    // Format the data as a string and write it to the file.
+    let data = format!("Temperature: {}°C, Humidity: {}%\n", response.temperature, response.humidity);
+    file.write_all(data.as_bytes())?;
+
+    Ok(())
 }
