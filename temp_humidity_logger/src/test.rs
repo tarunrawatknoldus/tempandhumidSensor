@@ -1,5 +1,4 @@
-use rppal::gpio::Gpio;
-use rppal::system::DeviceInfo;
+use rppal::gpio::{Gpio, InputPin, Level};
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::thread::sleep;
@@ -31,10 +30,10 @@ fn main() {
     }
 }
 
-fn read_dht11(pin: &rppal::gpio::InputPin) -> Result<(f32, f32), rppal::gpio::Error> {
+fn read_dht11(pin: &InputPin) -> Result<(f32, f32), rppal::gpio::Error> {
     // Send start signal by pulling the pin low for at least 18ms.
     pin.set_mode(rppal::gpio::Mode::Output)?;
-    pin.set_low();
+    pin.set_value(Level::Low);
     sleep(Duration::from_millis(18));
 
     // Switch the pin to input mode and wait for the sensor response.
@@ -45,7 +44,7 @@ fn read_dht11(pin: &rppal::gpio::InputPin) -> Result<(f32, f32), rppal::gpio::Er
     let mut data = [0u8; 5];
     for i in 0..40 {
         sleep(Duration::from_micros(1));
-        if pin.is_high() {
+        if pin.is_set_high()? {
             let index = i / 8;
             data[index] <<= 1;
             data[index] |= 1;
