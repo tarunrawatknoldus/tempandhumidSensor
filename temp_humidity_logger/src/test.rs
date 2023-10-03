@@ -1,71 +1,91 @@
 use simple_dht11::dht11::Dht11;
-use std::thread::sleep;
-use std::time::Duration;
 use std::error::Error;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
-use serde::{Serialize, Deserialize};
-use serde_json;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::Duration;
+use tokio::fs::File;
+use tokio::sync::mpsc;
+use actix_web::{web, App, HttpServer, HttpResponse, Responder};
 
-#[derive(Serialize, Deserialize)]
-struct SensorData {
+#[derive(Debug, serde::Serialize)]
+struct SensorReading {
     temperature: f32,
     humidity: f32,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut dht11 = Dht11::new(27); // Note this is BCM
+async fn record_sensor_data() -> Result<(), Box<dyn Error>> {
+    let mut dht11 = Dht11::new(4);
 
-    loop {
-        let response = dht11.get_reading();
+    // Open or create the CSV file for appending data
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("sensor_data.csv")?;
 
-        println!("Temperature: {}°C", response.temperature);
-        println!("Humidity: {}%", response.humidity);
+    let (tx, mut rx) = mpsc::channel::<SensorReading>(32);
 
-        // Load existing JSON data from the file
-        let mut existing_data = load_from_json_file()?;
+    // Spawn a background task to continuously record sensor data
+    tokio::spawn(async move {
+        loop {
+            let response = dht11.get_reading();
 
-        // Create a SensorData struct with the new reading
-        let new_data = SensorData {
-            temperature: response.temperature,
-            humidity: response.humidity,
-        };
+            let reading = SensorReading {
+                temperature: response.temperature,
+                humidity: response.humidity,
+            };
 
-        // Append the new reading to the existing data
-        existing_data.push(new_data);
+            // Send the reading to the main task for storage
+            if let Err(_) = tx.send(reading).await {
+                break;
+            }
 
-        // Serialize the updated data to JSON
-        let json_data = serde_json::to_string(&existing_data)?;
+            // Sleep for 1 second before the next reading
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
 
-        // Write the updated JSON data back to the file
-        save_to_json_file(&json_data)?;
+    while let Some(reading) = rx.recv().await {
+        println!("Temperature: {}°C, Humidity: {}%", reading.humidity, reading.temperature);
 
-        // Sleep for 1 second before the next reading
-        sleep(Duration::from_secs(1));
+        // Format the data for storing in the CSV file
+        let csv_line = format!("Temperature: {}°C, Humidity: {}%\n", reading.temperature, reading.humidity);
+
+        // Write data to the CSV file
+        if let Err(err) = tokio::fs::write("sensor_data.csv", csv_line).await {
+            eprintln!("Error writing data to CSV: {}", err);
+        }
     }
+
+    Ok(())
 }
 
-fn load_from_json_file() -> Result<Vec<SensorData>, Box<dyn Error>> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .create(true)
-        .write(true)
-        .open("sensor_data.json")?;
-    
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    
-    let data: Vec<SensorData> = serde_json::from_str(&contents)?;
+async fn get_latest_sensor_data() -> impl Responder {
+    // In a real-world application, you would read the latest data from your CSV file.
+    // For simplicity, we'll return dummy data here.
+    let dummy_data = SensorReading {
+        temperature: 25.5,
+        humidity: 50.0,
+    };
 
-    Ok(data)
+    HttpResponse::Ok().json(dummy_data)
 }
 
-fn save_to_json_file(data: &str) -> Result<(), Box<dyn Error>> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true) // Append mode
-        .open("sensor_data.json")?;
-    file.write_all(data.as_bytes())?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let addr = "127.0.0.1:8080";
+
+    // Spawn a background task to continuously record sensor data
+    tokio::spawn(record_sensor_data());
+
+    // Start the Actix web server
+    HttpServer::new(|| {
+        App::new()
+            .route("/api/latest", web::get().to(get_latest_sensor_data))
+    })
+    .bind(addr)?
+    .run()
+    .await?;
+
     Ok(())
 }
