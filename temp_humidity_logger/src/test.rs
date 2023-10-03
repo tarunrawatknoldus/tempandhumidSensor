@@ -2,8 +2,8 @@ use simple_dht11::dht11::Dht11;
 use std::thread::sleep;
 use std::time::Duration;
 use std::error::Error;
-use std::fs::File;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use serde::{Serialize, Deserialize};
 use serde_json;
 
@@ -22,27 +22,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Temperature: {}°C", response.temperature);
         println!("Humidity: {}%", response.humidity);
 
-        // Create a SensorData struct
-        let sensor_data = SensorData {
+        // Load existing JSON data from the file
+        let mut existing_data = load_from_json_file()?;
+
+        // Create a SensorData struct with the new reading
+        let new_data = SensorData {
             temperature: response.temperature,
             humidity: response.humidity,
         };
 
-        // Serialize the data to JSON
-        let json_data = serde_json::to_string(&sensor_data)?;
+        // Append the new reading to the existing data
+        existing_data.push(new_data);
 
-        // Write JSON data to a file
-        if let Err(err) = save_to_json_file(&json_data) {
-            eprintln!("Error writing data to JSON file: {}", err);
-        }
+        // Serialize the updated data to JSON
+        let json_data = serde_json::to_string(&existing_data)?;
+
+        // Write the updated JSON data back to the file
+        save_to_json_file(&json_data)?;
 
         // Sleep for 1 second before the next reading
         sleep(Duration::from_secs(1));
     }
 }
 
-fn save_to_json_file(data: &str) -> Result<(), std::io::Error> {
-    let mut file = File::create("sensor_data.json")?;
+fn load_from_json_file() -> Result<Vec<SensorData>, Box<dyn Error>> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .create(true)
+        .write(true)
+        .open("sensor_data.json")?;
+    
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    
+    let data: Vec<SensorData> = serde_json::from_str(&contents)?;
+
+    Ok(data)
+}
+
+fn save_to_json_file(data: &str) -> Result<(), Box<dyn Error>> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true) // Append mode
+        .open("sensor_data.json")?;
     file.write_all(data.as_bytes())?;
     Ok(())
 }
